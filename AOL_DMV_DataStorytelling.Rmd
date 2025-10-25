@@ -1,0 +1,383 @@
+---
+title: "AOL_DMV_DataStorytelling"
+author: "Group 7"
+date: "2024-06-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(plotly)
+library(leaflet)
+```
+
+first we import the dataset needed, we're using 2 dataframe to analyze the correlation between Jakarta's green area and air pollution
+```{r}
+setwd("G:/My Drive/BINUS/KULIAH/SEM 2/Data Mining & Visualisation/AOL_Dataset")
+
+dfgreen <- read.csv("Jmlh_Lapangan_Terbuka_Hijau.csv")
+dfpolut <- read.csv("IndeksPencemaranUdara_Jakarta.csv")
+```
+we then display the first few rows of the green area dataset to make sure we import the right content
+```{r}
+head(dfgreen)
+```
+to further analysis, we identify the unique types of green areas
+```{r}
+unique(dfgreen$Jenis)
+```
+and then we filter the green area data to include only certain types and exclude 'Kep. Seribu'
+```{r}
+subset_green <- dfgreen[dfgreen$Jenis %in% c("Taman Kota dan Taman Lingkungan", "Taman Interaktif", "Jalur Hijau Jalan & Pedestrian", "Jalur Hijau Tepian Air & Penyempurna") & dfgreen$Kota.Adm != "Kep. Seribu", ]
+
+subset_green
+```
+We then create a new dataframe with latitude and longitude for each administrative city in Jakarta and merge it with the green area data
+```{r}
+location_data <- data.frame(
+  Kota.Adm = c("Jakarta Barat", "Jakarta Pusat", "Jakarta Selatan", "Jakarta Timur", "Jakarta Utara"),
+  latitude = c(-6.2088, -6.1894, -6.2615, -6.2297, -6.1396),
+  longitude = c(106.7831, 106.8323, 106.8106, 106.8701, 106.8827)
+)
+
+total_green_map <- subset_green %>%
+  left_join(location_data, by = "Kota.Adm")
+
+total_green_map
+```
+We then calculate the total number and area of green spaces for each administrative city in Jakarta
+```{r}
+total_green_area_byKota <- subset_green %>%
+  group_by(Kota.Adm) %>%
+  summarise(Total_Jumlah = sum(Jumlah), Total_Luas = sum(Luas))
+
+total_green_area_byKota
+```
+We categorize the green areas based on their size and count the number of green areas in each category, this is kind of binning as the data visualization using autobinning didn't give us the right visualization
+```{r}
+breaks <- c(0, 50000, 100000, 500000, 1000000, Inf)
+labels <- c("<50k m2", "50k-100k m2", "100k-500k m2", "500k-1M m2", ">1M m2")
+
+Luas_occur <- subset_green %>%
+  mutate(Luas_GreenArea = cut(Luas, breaks = breaks, labels = labels, right = F))
+
+Total_Luas_Greenarea <- Luas_occur %>%
+  group_by(Luas_GreenArea) %>%
+  summarise(Count = n())
+
+Total_Luas_Greenarea
+
+
+```
+
+we also calculate the total number and area of each type of green space
+```{r}
+total_green_area <- subset_green %>% 
+  group_by(Jenis) %>%
+  summarise(Total_Jumlah = sum(Jumlah), Total_Luas = sum(Luas))
+
+total_green_area
+```
+
+
+We're done on manipulating the green area dataset, then we move to the air pollution dataset
+```{r}
+dfpolut
+```
+
+
+Here we convert the date column to date type using as.date function and filter out data from January as January have many missing value for PM25 and will biases our analysis
+```{r}
+dfpolut$Tanggal <- as.Date(dfpolut$tanggal, format = "%m/%d/%Y")
+
+start_date <- as.Date("2021-01-01")
+end_date <- as.Date("2021-01-31")
+
+subset_polut <- dfpolut[!(dfpolut$Tanggal >= start_date & dfpolut$Tanggal  <= end_date), ]
+
+print(subset_polut)
+```
+We use colsums and is.na function to see if there's any missing value in the dataset, fortunately ours didn't have it
+```{r}
+colSums(is.na(subset_polut))
+```
+We create boxplots for each type of pollutant to visualize their distributions and finding out outlier
+```{r}
+boxplot(subset_polut$pm10, main = "pm10")
+boxplot(subset_polut$pm25, main = "pm25")
+boxplot(subset_polut$so2, main = "so2")
+boxplot(subset_polut$co, main = "co")
+boxplot(subset_polut$o3, main = "o3")
+boxplot(subset_polut$no2, main = "no2")
+```
+We define a function to identify outliers and count the number of outliers for each pollutant.
+```{r}
+numpolut <- subset_polut[,c(2:7)]
+
+Outlier <- function(x, thres = 1.5){
+  Q1 <- quantile(x, 0.25)
+  Q3 <- quantile(x, 0.75)
+  IQR_Value <- IQR(x)
+  lower_bound <- Q1 - thres*IQR_Value
+  upper_bound <- Q3 + thres*IQR_Value
+  outliers <- x[x < lower_bound | x > upper_bound]
+  return(outliers)
+}
+ 
+outlier_count <-sapply(numpolut, function(x) length(Outlier(x)))
+print(outlier_count)
+```
+We replace the location codes with their corresponding city names.
+```{r}
+location_label <- c("DKI1" = "Jakarta Pusat", "DKI2" = "Jakarta Utara", "DKI3" = "Jakarta Selatan", "DKI4" = "Jakarta Timur", "DKI5" = "Jakarta Barat")
+
+subset_polut <- subset_polut %>%
+  mutate(location = case_when(
+    location == "DKI1" ~ "Jakarta Pusat",
+    location == "DKI2" ~ "Jakarta Utara",
+    location == "DKI3" ~ "Jakarta Selatan",
+    location == "DKI4" ~ "Jakarta Timur",
+    location == "DKI5" ~ "Jakarta Barat",
+    TRUE ~ as.character(location)  
+  ))
+
+subset_polut
+```
+We count the number of occurrences of each critical pollutant by location
+```{r}
+critpolut <- subset_polut %>% group_by(location) %>%
+  summarise(
+    pm10 = sum(critical == "PM10", na.rm = TRUE),
+    pm25 = sum(critical == "PM25", na.rm = TRUE),
+    so2 = sum(critical == "SO2", na.rm = TRUE),
+    co = sum(critical == "CO", na.rm = TRUE),
+    o3 = sum(critical == "O3", na.rm = TRUE),
+    no2 = sum(critical == "NO2", na.rm = TRUE)
+  )
+  
+critpolut
+```
+We calculate the total number of pollution readings per location.
+```{r}
+contribution <- subset_polut %>%
+  group_by(location) %>%
+  summarise(contributions = n())
+
+contribution
+```
+We summarize the number of occurrences of each critical pollutant by month.
+```{r}
+subset_polut <- subset_polut %>%
+  mutate(month = format(Tanggal, "%Y-%m"))
+
+critical_count <- subset_polut %>%
+  group_by(month) %>%
+  summarise(
+    pm10 = sum(critical == "PM10", na.rm = TRUE),
+    pm25 = sum(critical == "PM25", na.rm = TRUE),
+    so2 = sum(critical == "SO2", na.rm = TRUE),
+    co = sum(critical == "CO", na.rm = TRUE),
+    o3 = sum(critical == "O3", na.rm = TRUE),
+    no2 = sum(critical == "NO2", na.rm = TRUE)
+  )
+
+print(critical_count)
+```
+We count the total number of pollution readings per month by location.
+```{r}
+month_counts <- subset_polut %>%
+  group_by(month, location) %>%
+  summarise(count = n())
+
+print(month_counts)
+```
+We calculate the total number of occurrences for each pollutant across all locations.
+```{r}
+count_data <- critpolut %>%
+  summarise(across(pm10:no2, sum))
+
+count_data
+```
+We count the number of pollution readings by location and category.
+```{r}
+category_counts <- subset_polut %>%
+  group_by(location, categori) %>%
+  summarise(count = n())
+
+print(category_counts)
+```
+We summarize the total number of occurrences for each pollution category.
+```{r}
+categories <- subset_polut %>%
+  group_by(categori) %>%
+  summarise(count = n())
+
+print(categories)
+```
+
+Data Visualization
+
+Univariate
+```{r}
+#CATEGORICAL 
+## total kontribusi SPKU per Kota
+
+plot_ly(contribution, y = ~contributions, x = ~location, type = 'bar', marker = list(color = 'green')) %>%
+  layout(
+    title = "Total kontribusi kota",
+    xaxis = list(title = "location"),
+    yaxis = list(title = "contribution"),
+    barmode = 'group'
+  )
+
+```
+We create a bar chart to visualize the total number of pollution readings contributed by each city.
+
+by this visualization we can see that Jakarta Timur are the most city to contribute in pollutant reporting, followed by Jakarta Selatan, Jakarta Utara and Jakrta Barat
+
+
+
+```{r}
+#CATEGORICAL
+## jumlah tingkat polusi
+
+plot_ly(categories, labels = ~categori, values = ~count, type = 'pie') %>% 
+  layout(title = "Jumlah Indeks Polusi")
+```
+We create a pie chart to visualize the distribution of pollution index categories.
+
+By this visualization we can see that Jakarta experienced SEDANG and TIDAK SEHAT conditions, as evidenced by a very high percentage compared to BAIK which does not even reach 1 percent
+
+
+
+```{r}
+#NUMERICAL
+## how many green area each
+
+plot_ly(total_green_area, y = ~Total_Jumlah, x = ~Jenis, type = 'bar') %>%
+  layout(title = "Banyak Lapangan Hijau")
+```
+We create a bar chart to visualize the number of green areas for each type.
+
+By this visualization, we can interpret that in Jakarta, Taman Kota dan Taman Lingkungan are the most Green Area scattered in Jakarta compared by the other category such as Taman Interaktif, Jalur Hijau Tepian Air & Penyempurna and Jalur Hijau Jalan & Pedestrian
+
+
+
+```{r}
+#NUMERICAL
+## Luas Lapangan Hijau di Jakarta
+
+plot_ly(subset_green, x = ~Luas)
+
+plot_ly(Total_Luas_Greenarea, x = ~Luas_GreenArea, y = ~Count) %>% layout(title = "Luas Lapangan Hijau")
+```
+We create a bar chart to visualize the distribution of green area sizes.
+
+We do 2 make visualization for 2 kind of data that have the same meaning. for the 1st visualization, the binning are automated by plotly but didn't give great visualization for the data while the 2nd visualization with manual binning create better visualization to intepret the data as we can see that many green area in jakarta have Area less than 50k m2
+
+
+
+
+Bivariate Visualization
+
+```{r}
+#NUM - CAT
+
+plot_ly(total_green_map, x = ~Kota.Adm, y = ~Jumlah, color = ~Jenis) %>% layout(barmode = 'stack')
+```
+We create a stacked bar chart to visualize the distribution of green areas by type across different cities
+
+By this data, we can interpret that Taman Kota and Taman Lingkungan as the most green area for each city, and the least is variative
+
+
+
+```{r}
+#CAT - CAT
+
+plot_ly(category_counts, x = ~location, y = ~count, color = ~categori)
+```
+We create a grouped bar chart to visualize the count of pollution readings by category and city.
+
+By the visualization we can interpret that Jakarta Timur has the most contribution to the SPKU and each city have SEDANG as their most pollution index
+
+
+
+
+Multivariate Visualization
+
+```{r}
+#NUM - NUM - CAT
+
+plot_ly(total_green_area_byKota, x = ~Kota.Adm) %>% 
+  add_bars(y = ~Total_Jumlah, name = 'Jumlah') %>%
+  add_lines(y = ~Total_Luas, name = 'Luas', yaxis = 'y2') %>%
+  layout(title = "Jumlah dan Luas Lapangan Hijau per Kota Administrasi",
+         xaxis = list(title = "Kota Administrasi"),
+         yaxis = list(title = "Total Jumlah", side = 'left', showgrid = FALSE),
+         yaxis2 = list(title = "Total Luas", overlaying = "y", side = "right", showgrid = FALSE))
+```
+We create a combined bar and line chart to visualize the total number and area of green spaces for each city.
+
+On the left we can see the count of Green Area total for each city, and to the right we can see the tota of Green Areas area for each city, from this visualization we get that Area and Total didn't always correlated as Jakarta Selatan have the most Green Area but the Area do not have as much as Jakarta Pusat which stands in 2nd place
+
+
+```{r}
+# NUM - CAT - CAT
+
+plot_ly(month_counts, x = ~month, y = ~count, color = ~location, type = 'scatter', mode = 'markers', line = list(shape = "linear")) %>%
+  layout(title = "Kontribusi SPKU per Bulan")
+```
+We create a line chart to visualize the number of pollution readings per month by city.
+
+in this chart we can interpret that Jakarta Timur ever not be the most city to contribute to SPKU reporting but then raising starting from May and make the other city not contribute much
+
+
+
+
+MAP
+```{r}
+#  plot_ly(
+#   data = total_green_map,
+#   type = "scattermapbox",
+#   lat = ~latitude,
+#   lon = ~longitude,
+#   mode = "markers",
+#   color = ~jenis,
+#   marker = list(size = 9, color = ~jenis),
+# ) %>%
+#   layout(
+#     title = "Banyak Area Hijau",
+#     mapbox = list(
+#       style = "open-street-map",
+#       zoom = 10,
+#       center = list(lat = mean(total_green_map$latitude), lon = mean(total_green_map$longitude))
+#     )
+#   )
+```
+We create an interactive map using Plotly to visualize the locations of green areas in Jakarta.
+
+but unfortunately due to error we don't understand why, the map visualization cannot be ran, but i expecting to see which country has the most contribution to green area
+```{r}
+leaflet(total_green_map) %>%
+  addTiles() %>%
+  addCircleMarkers(
+    ~longitude, ~latitude,
+    color = ~Jenis,
+    popup = ~paste("Jenis: ", Jenis, "<br>",
+                   "Jumlah: ", Jumlah, "<br>",
+                   "Luas: ", Luas),
+    radius = 8,
+    fillOpacity = 0.7
+  ) 
+```
+We create an interactive map using Leaflet to visualize the locations of green areas in Jakarta, with additional details in popups.
+
+but unfortunately the outcome also didn't come as planned as the dot only scattered in one point as the latitude and longitude only have general point
+
+
+
+
+
+
+
